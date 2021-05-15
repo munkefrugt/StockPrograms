@@ -1,0 +1,251 @@
+# QUANTCONNECT.COM - Democratizing Finance, Empowering Individuals.
+# Lean Algorithmic Trading Engine v2.0. Copyright 2014 QuantConnect Corporation.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+from System import *
+from QuantConnect import *
+from QuantConnect.Data.Consolidators import *
+from QuantConnect.Data.Market import *
+from QuantConnect.Orders import OrderStatus
+from QuantConnect.Algorithm import QCAlgorithm
+from QuantConnect.Indicators import *
+import numpy as np
+from datetime import timedelta, datetime
+from datetime import timedelta
+from System.Drawing import Color
+import numpy as np
+from scipy.signal import argrelextrema
+
+### <summary>
+### Example structure for structuring an algorithm with indicator and consolidator data for many tickers.
+### </summary>
+### <meta name="tag" content="consolidating data" />
+### <meta name="tag" content="indicators" />
+### <meta name="tag" content="using data" />
+### <meta name="tag" content="strategy example" />
+class MultipleSymbolConsolidationAlgorithm(QCAlgorithm):
+    
+    # Initialise the data and resolution required, as well as the cash and start-end dates for your algorithm. All algorithms must initialized.
+    def Initialize(self):
+        
+        # This is the period of bars we'll be creating
+        BarPeriod = TimeSpan.FromMinutes(5)
+        # This is the period of our sma indicators
+        SimpleMovingAveragePeriod = 10
+        # This is the number of consolidated bars we'll hold in symbol data for reference
+        RollingWindowSize = 10
+        # Holds all of our data keyed by each symbol
+        self.Data = {}
+        self.Charts = dict()
+
+        # Contains all of our equity symbols
+        EquitySymbols = ["SPY"]
+        # Contains all of our forex symbols
+        ForexSymbols =["EURUSD"]
+        
+        self.SetStartDate(2021,4,1)    # Set Start Date
+        self.SetEndDate(2021,4,2) 
+        
+        # initialize our equity data
+        for symbol in EquitySymbols:
+            equity = self.AddEquity(symbol)
+            self.Data[symbol] = SymbolData(equity.Symbol, BarPeriod, RollingWindowSize)
+        
+        # initialize our forex data 
+        for symbol in ForexSymbols:
+            forex = self.AddForex(symbol)
+            self.Data[symbol] = SymbolData(forex.Symbol, BarPeriod, RollingWindowSize)
+
+        # loop through all our symbols and request data subscriptions and initialize indicator
+        for symbol, symbolData in self.Data.items():
+            # define the indicator
+            symbolData.EMA15 = ExponentialMovingAverage(self.CreateIndicatorName(symbol, "EMA15" + str(15), Resolution.Minute), 15)
+            symbolData.EMA60 = ExponentialMovingAverage(self.CreateIndicatorName(symbol, "EMA60" + str(60), Resolution.Minute), 60)
+            # define a consolidator to consolidate data for this symbol on the requested period
+            # set parameters
+            symbolData.MACD = self.MACD(symbol, 12,26,9,MovingAverageType.Exponential,Resolution.Minute)
+            
+            consolidator = TradeBarConsolidator(BarPeriod) if symbolData.Symbol.SecurityType == SecurityType.Equity else QuoteBarConsolidator(BarPeriod)
+            # write up our consolidator to update the indicator
+            consolidator.DataConsolidated += self.OnDataConsolidated
+            # we need to add this consolidator so it gets auto updates
+            self.SubscriptionManager.AddConsolidator(symbolData.Symbol, consolidator)
+            
+            # ad chart the usual way. 
+            
+            
+            self.Charts[symbol] = dict()
+            # Plot the SMA
+            SMAChartName = symbol+" TradePlot"
+            self.Charts[symbol][' TradePlot'] = Chart(SMAChartName, ChartType.Stacked)
+            self.Charts[symbol][' TradePlot'].AddSeries(Series('Buy', SeriesType.Scatter, '$', Color.Green, ScatterMarkerSymbol.Diamond))
+            self.Charts[symbol][' TradePlot'].AddSeries(Series('Sell', SeriesType.Scatter, '$', Color.Red, ScatterMarkerSymbol.Diamond))
+            #self.Charts[Symbol][' TradePlot'].AddSeries(Series("200", SeriesType.Line,"", Color.Red))
+            #self.Charts[Symbol][' TradePlot'].AddSeries(Series("50", SeriesType.Line,"", Color.Blue))
+            self.Charts[symbol][' TradePlot'].AddSeries(Series("close", SeriesType.Line,"", Color.Gray))
+            self.Charts[symbol][' TradePlot'].AddSeries(Series("EMA15", SeriesType.Line,"", Color.Orange))
+            self.Charts[symbol][' TradePlot'].AddSeries(Series("EMA60", SeriesType.Line,"", Color.Brown))
+            #self.Charts[symbol][' TradePlot'].AddSeries(Series('MACD', SeriesType.Line, "", Color.Pink))
+
+            self.AddChart(self.Charts[symbol][' TradePlot'])
+            
+            
+            MACDchart = symbol+" MACDPlot"
+            self.Charts[symbol][' MACDPlot'] = Chart(MACDchart, ChartType.Stacked)
+            self.Charts[symbol][' MACDPlot'].AddSeries(Series("macd", SeriesType.Line,"", Color.Blue))
+            self.Charts[symbol][' MACDPlot'].AddSeries(Series("signal", SeriesType.Line,"", Color.Orange))
+            self.Charts[symbol][' MACDPlot'].AddSeries(Series("difference", SeriesType.Line,"", Color.Green))
+
+            self.AddChart(self.Charts[symbol][' MACDPlot'])
+            
+            self.SetWarmUp(timedelta(minutes= 60))
+
+
+    def OnDataConsolidated(self, sender, bar):
+        if self.IsWarmingUp: return
+
+        self.Data[bar.Symbol.Value].EMA15.Update(bar.Time, bar.Close)
+        self.Data[bar.Symbol.Value].EMA60.Update(bar.Time, bar.Close)
+        self.Data[bar.Symbol.Value].Bars.Add(bar)
+        
+        close = bar.Close
+        symbol = str(bar.get_Symbol())
+
+        #self.Plot(symbol +' TradePlot', 'close', close)
+
+
+    # OnData event is the primary entry point for your algorithm. Each new data point will be pumped in here.
+    # Argument "data": Slice object, dictionary object with your stock data 
+    def OnData(self,data):
+        if self.IsWarmingUp: return
+
+        # loop through each symbol in our structure
+        for symbol in self.Data.keys():
+            symbolData = self.Data[symbol]
+            # this check proves that this symbol was JUST updated prior to this OnData function being called
+            if symbolData.IsReady() and symbolData.WasJustUpdated(self.Time):
+                
+                macd = symbolData.MACD.Current.Value
+                signal = symbolData.MACD.Signal.Current.Value
+                difference= macd - signal 
+                
+                EMA15 = symbolData.EMA15.Current.Value
+                EMA60 = symbolData.EMA60.Current.Value
+                close = symbolData.Bars[0].Close
+    
+                self.Plot(symbol +' TradePlot', 'close', close)
+
+                self.Plot(symbol +' MACDPlot', 'macd', macd)
+                self.Plot(symbol +' MACDPlot', 'signal', signal)
+                self.Plot(symbol +' MACDPlot', 'difference', difference)
+                #if EMA60 is not 0:  
+                self.Plot(symbol +' TradePlot', 'EMA15', EMA15)
+                self.Plot(symbol +' TradePlot', 'EMA60', EMA60)
+                
+                self.Plot(symbol +' TradePlot', 'EMA15', symbolData.EMA15.Current.Value)
+                self.Plot(symbol +' TradePlot', 'EMA60', symbolData.EMA60.Current.Value)
+
+                # here goes the strategy: 
+                    
+                # link video https://www.youtube.com/watch?v=9o6BG-dCgco&t=8s
+                # shoting conditions
+                # EMA15 < EMA60 
+                # higher high on price. 2 tops. 
+                # lower low on macd 2 tops no touching histogram.
+                # macd and signal above 0 line 
+                # make sure the macd and signal dose not touch the 0 line inbetween the tops
+                # make sure the histogram changes color in the histogram, 
+                # - in the valey between the to tops. 
+                #BUY
+                
+                if not self.Portfolio[symbol].Invested:
+    
+                    if EMA15 > EMA60: 
+                        # find macd buy signal
+                            # if there is local minimums under the macd,
+                            # and the latest is the local minimum with the highest value
+                        # looking for 2 crests under 0 line. 
+                        # if macd < 0 start storing values in an array.
+                        
+                        # if find local minimums in array. 
+                        
+                        
+                        self.Plot(symbol +' TradePlot', 'Buy', close)
+
+                        #if macd < 0 :
+                            # crossing the zero line 
+                            #self.SymbolData[Symbol]['macdCrossed'] = True
+                            
+                            # store values to array
+                            #self.SymbolData[symbol]['extremaData'].append(macd)
+                        
+                        # clear list when over 0. 
+                        #if macd > 0:
+                            #self.SymbolData[symbol]['extremaData'].clear()
+                            #self.MarketOrder(symbol, 1)
+
+                        
+                        
+                        # check for local minimums.
+                        # convert array to np array. 
+                        #a = np.array(SymbolData[Symbol].ExtremaData)    
+                        #find minimums:
+                        #arrayMin = argrelextrema(a, np.less)
+                        
+                        #self.Debug(arrayMin)
+                            
+                        # TODO: buy signal at marts 10 , at 19:00 - 20:00. indicator is good enough. 
+                        
+                        
+                
+                
+                
+                    
+
+    # End of a trading day event handler. This method is called at the end of the algorithm day (or multiple times if trading multiple assets).
+    # Method is called 10 minutes before closing to allow user to close out position.
+    def OnEndOfDay(self, symbol):
+        pass
+        #i = 0
+        #for symbol in sorted(self.Data.keys()):
+            #symbolData = self.Data[symbol]
+            # we have too many symbols to plot them all, so plot every other
+            ##i += 1
+            #if symbolData.IsReady() and i%2 == 0:
+                #self.Plot(symbol, symbol, symbolData.SMA.Current.Value)
+                #self.Plot(symbol, symbol, symbolData.MACD.Current.Value)
+
+       
+class SymbolData(object):
+    
+    def __init__(self, symbol, barPeriod, windowSize):
+        self.Symbol = symbol
+        # The period used when population the Bars rolling window
+        self.BarPeriod = barPeriod
+        # A rolling window of data, data needs to be pumped into Bars by using Bars.Update( tradeBar ) and can be accessed like:
+        # mySymbolData.Bars[0] - most first recent piece of data
+        # mySymbolData.Bars[5] - the sixth most recent piece of data (zero based indexing)
+        self.Bars = RollingWindow[IBaseDataBar](windowSize)
+        # The simple moving average indicator for our symbol
+        self.EMA15 = None
+        self.EMA60 = None
+        self.MACD = None
+        self.ExtremaData = []
+  
+    # Returns true if all the data in this instance is ready (indicators, rolling windows, ect...)
+    def IsReady(self):
+        return self.Bars.IsReady and self.EMA60.IsReady and self.EMA15.IsReady
+
+    # Returns true if the most recent trade bar time matches the current time minus the bar's period, this
+    # indicates that update was just called on this instance
+    def WasJustUpdated(self, current):
+        return self.Bars.Count > 0 and self.Bars[0].Time == current - self.BarPeriod
