@@ -4,11 +4,16 @@ class RetrospectiveTanFly(QCAlgorithm):
         self.SetStartDate(2019, 12, 13)
         self.SetCash(100000) 
         
+        
+        # a way to 
                 
         # request the equity data in minute resolution
         self.AddEquity("SPY", Resolution.Minute)
 
         # define a 10-period ichimoku indicator with indicator constructor
+        
+        # notice the constructor is empty where the "" are.
+        # also notice it's called "IchimokuKinkoHyo" not " self.ICHIMOKU" . thats how its done.
         self.ichimoku30 = IchimokuKinkoHyo("", 9, 26, 26, 52, 26, 26)
         self.ichimoku4H = IchimokuKinkoHyo("", 9, 26, 26, 52, 26, 26)
         self.ichimokuDay = IchimokuKinkoHyo("", 9, 26, 26, 52, 26, 26)
